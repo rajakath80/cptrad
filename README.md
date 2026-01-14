@@ -1,7 +1,6 @@
 # CopyTrade POC — BPMN Workflow Automation in Rust
 
 A weekend proof-of-concept exploring declarative business process orchestration using BPMN 2.0 in a Rust backend.
-
 ## Stack
 
 | Layer | Tech |
@@ -12,9 +11,11 @@ A weekend proof-of-concept exploring declarative business process orchestration 
 | Workflow | Snurr BPMN Engine |
 
 ## Architecture
+
 ```
 Vue.js → GraphQL API → Snurr BPMN Engine → Business Logic → In-Memory DB
 ```
+![Architecture Diagram](./architecture.png)
 
 ## BPMN Workflows
 
