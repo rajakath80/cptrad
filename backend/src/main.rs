@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-// ============== Data Models ==============
+// ================= Data Models =================
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 pub struct User {
@@ -73,7 +73,7 @@ pub struct CopiedTrade {
     pub status: TradeStatus,
 }
 
-// ============== In-Memory Database ==============
+// ================= In-Memory Database =================
 
 #[derive(Default)]
 pub struct Database {
@@ -85,7 +85,9 @@ pub struct Database {
 
 pub type DbPool = Arc<RwLock<Database>>;
 
+// Initialize database with sample users and trades
 fn init_sample_data(db: &mut Database) {
+    // Traders
     let trader1 = User {
         id: ID("trader1".to_string()),
         username: "AlphaTrader".to_string(),
@@ -96,18 +98,17 @@ fn init_sample_data(db: &mut Database) {
         is_trader: true,
         created_at: Utc::now(),
     };
-
     let trader2 = User {
         id: ID("trader2".to_string()),
         username: "CryptoKing".to_string(),
         balance: 250000.0,
-        total_pnl: 42350.00,
+        total_pnl: 42350.0,
         win_rate: 0.68,
         followers_count: 312,
         is_trader: true,
         created_at: Utc::now(),
     };
-
+    // Regular user
     let user1 = User {
         id: ID("user1".to_string()),
         username: "NewInvestor".to_string(),
@@ -123,6 +124,7 @@ fn init_sample_data(db: &mut Database) {
     db.users.insert(trader2.id.to_string(), trader2);
     db.users.insert(user1.id.to_string(), user1);
 
+    // Trades
     let trade1 = Trade {
         id: ID("trade1".to_string()),
         trader_id: ID("trader1".to_string()),
@@ -136,7 +138,6 @@ fn init_sample_data(db: &mut Database) {
         created_at: Utc::now(),
         closed_at: None,
     };
-
     let trade2 = Trade {
         id: ID("trade2".to_string()),
         trader_id: ID("trader2".to_string()),
@@ -155,7 +156,7 @@ fn init_sample_data(db: &mut Database) {
     db.trades.insert(trade2.id.to_string(), trade2);
 }
 
-// ============== BPMN Workflow Context ==============
+// ================= BPMN Workflow Contexts =================
 
 #[derive(Default)]
 pub struct TradeWorkflowCtx {
@@ -181,18 +182,18 @@ pub struct CopyWorkflowCtx {
     pub db: Option<DbPool>,
 }
 
-// ============== BPMN Workflow Execution ==============
+// ================= BPMN Workflow Execution =================
 
+// Execute Create Trade workflow using BPMN
 pub fn execute_create_trade(db: DbPool, input: &CreateTradeInput) -> Result<Trade, String> {
     println!("🔄 BPMN: Starting Create Trade workflow");
 
     let process = Process::<TradeWorkflowCtx>::new("bpmn/create_trade.bpmn")
         .map_err(|e| format!("BPMN parse error: {:?}", e))?
-        // Task: Validate Trade Input
+        // Validate trade input (quantity and entry price)
         .task("Validate Trade Input", |ctx| {
             println!("  📋 Task: Validate Trade Input");
             let mut guard = ctx.lock().unwrap();
-
             if guard.quantity <= 0.0 {
                 guard.is_valid = false;
                 guard.error = Some("Invalid quantity".to_string());
@@ -208,23 +209,21 @@ pub fn execute_create_trade(db: DbPool, input: &CreateTradeInput) -> Result<Trad
             );
             None
         })
-        // Gateway: Is Valid?
+        // Conditional gateway: proceed only if input is valid
         .exclusive("Is Valid", |ctx| {
             let guard = ctx.lock().unwrap();
             if guard.is_valid { "Yes" } else { "No" }.into()
         })
-        // Task: Create Trade Record
+        // Create trade record in DB
         .task("Create Trade Record", |ctx| {
             println!("  💾 Task: Create Trade Record");
             let mut guard = ctx.lock().unwrap();
-
             let trade_id = Uuid::new_v4().to_string();
             let direction = if guard.direction == "Long" {
                 TradeDirection::Long
             } else {
                 TradeDirection::Short
             };
-
             let trade = Trade {
                 id: ID(trade_id.clone()),
                 trader_id: ID(guard.trader_id.clone()),
@@ -238,7 +237,6 @@ pub fn execute_create_trade(db: DbPool, input: &CreateTradeInput) -> Result<Trad
                 created_at: Utc::now(),
                 closed_at: None,
             };
-
             if let Some(ref db) = guard.db {
                 db.write().trades.insert(trade_id.clone(), trade);
             }
@@ -246,21 +244,18 @@ pub fn execute_create_trade(db: DbPool, input: &CreateTradeInput) -> Result<Trad
             println!("    ✅ Trade created: {}", trade_id);
             None
         })
-        // Task: Copy Trade To Followers
+        // Copy trade to active followers
         .task("Copy Trade To Followers", |ctx| {
             println!("  👥 Task: Copy Trade To Followers");
             let guard = ctx.lock().unwrap();
-
             if let Some(ref db) = guard.db {
                 let mut db_lock = db.write();
-
                 let followers: Vec<CopyRelation> = db_lock
                     .copy_relations
                     .values()
                     .filter(|r| r.trader_id.to_string() == guard.trader_id && r.active)
                     .cloned()
                     .collect();
-
                 let count = followers.len();
                 for relation in followers {
                     let copied_trade_id = Uuid::new_v4().to_string();
@@ -281,7 +276,7 @@ pub fn execute_create_trade(db: DbPool, input: &CreateTradeInput) -> Result<Trad
         .build()
         .map_err(|e| format!("BPMN build error: {:?}", e))?;
 
-    // Prepare context
+    // Prepare workflow context
     let ctx = TradeWorkflowCtx {
         trader_id: input.trader_id.to_string(),
         symbol: input.symbol.clone(),
@@ -294,13 +289,13 @@ pub fn execute_create_trade(db: DbPool, input: &CreateTradeInput) -> Result<Trad
         db: Some(db.clone()),
     };
 
-    // Run workflow
+    // Execute workflow
     let result = process
         .run(ctx)
         .map_err(|e| format!("Workflow error: {:?}", e))?;
     println!("✅ BPMN: Workflow completed");
 
-    // Return created trade
+    // Retrieve created trade from DB
     if !result.trade_id.is_empty() {
         let db_lock = db.read();
         if let Some(trade) = db_lock.trades.get(&result.trade_id) {
@@ -313,16 +308,16 @@ pub fn execute_create_trade(db: DbPool, input: &CreateTradeInput) -> Result<Trad
         .unwrap_or_else(|| "Trade creation failed".to_string()))
 }
 
+// Execute Copy Trader workflow using BPMN
 pub fn execute_copy_trader(db: DbPool, input: &CopyTraderInput) -> Result<CopyRelation, String> {
     println!("🔄 BPMN: Starting Copy Trader workflow");
     let bpmn = "./bpmn/copy_trader.bpmn";
     let process = Process::<CopyWorkflowCtx>::new(bpmn)
         .map_err(|e| format!("BPMN parse error: {:?}", e))?
-        // Task: Validate Copy Request
+        // Validate copy request (ratio 0.01..1.0)
         .task("Validate Copy Request", |ctx| {
             println!("  📋 Task: Validate Copy Request");
             let mut guard = ctx.lock().unwrap();
-
             if guard.copy_ratio < 0.01 || guard.copy_ratio > 1.0 {
                 guard.is_valid = false;
                 guard.error = Some("Invalid copy ratio".to_string());
@@ -335,16 +330,15 @@ pub fn execute_copy_trader(db: DbPool, input: &CopyTraderInput) -> Result<CopyRe
             );
             None
         })
-        // Gateway: Is Valid?
+        // Conditional gateway: proceed only if valid
         .exclusive("Is Valid", |ctx| {
             let guard = ctx.lock().unwrap();
             if guard.is_valid { "Yes" } else { "No" }.into()
         })
-        // Task: Create Copy Relation
+        // Create copy relation in DB
         .task("Create Copy Relation", |ctx| {
             println!("  💾 Task: Create Copy Relation");
             let mut guard = ctx.lock().unwrap();
-
             let relation_id = Uuid::new_v4().to_string();
             let relation = CopyRelation {
                 id: ID(relation_id.clone()),
@@ -354,7 +348,6 @@ pub fn execute_copy_trader(db: DbPool, input: &CopyTraderInput) -> Result<CopyRe
                 active: true,
                 created_at: Utc::now(),
             };
-
             if let Some(ref db) = guard.db {
                 db.write()
                     .copy_relations
@@ -364,11 +357,10 @@ pub fn execute_copy_trader(db: DbPool, input: &CopyTraderInput) -> Result<CopyRe
             println!("    ✅ Relation created: {}", relation_id);
             None
         })
-        // Task: Update Follower Count
+        // Update trader's follower count
         .task("Update Follower Count", |ctx| {
             println!("  📊 Task: Update Follower Count");
             let guard = ctx.lock().unwrap();
-
             if let Some(ref db) = guard.db {
                 let mut db_lock = db.write();
                 if let Some(trader) = db_lock.users.get_mut(&guard.trader_id) {
@@ -381,7 +373,7 @@ pub fn execute_copy_trader(db: DbPool, input: &CopyTraderInput) -> Result<CopyRe
         .build()
         .map_err(|e| format!("BPMN build error: {:?}", e))?;
 
-    // Prepare context
+    // Prepare workflow context
     let ctx = CopyWorkflowCtx {
         follower_id: input.follower_id.to_string(),
         trader_id: input.trader_id.to_string(),
@@ -392,13 +384,13 @@ pub fn execute_copy_trader(db: DbPool, input: &CopyTraderInput) -> Result<CopyRe
         db: Some(db.clone()),
     };
 
-    // Run workflow
+    // Execute workflow
     let result = process
         .run(ctx)
         .map_err(|e| format!("Workflow error: {:?}", e))?;
     println!("✅ BPMN: Workflow completed");
 
-    // Return created relation
+    // Retrieve created relation from DB
     if !result.relation_id.is_empty() {
         let db_lock = db.read();
         if let Some(relation) = db_lock.copy_relations.get(&result.relation_id) {
@@ -409,12 +401,13 @@ pub fn execute_copy_trader(db: DbPool, input: &CopyTraderInput) -> Result<CopyRe
     Err(result.error.unwrap_or_else(|| "Copy failed".to_string()))
 }
 
-// ============== GraphQL Schema ==============
+// ================= GraphQL Schema =================
 
 pub struct QueryRoot;
 
 #[Object]
 impl QueryRoot {
+    // Fetch all traders
     async fn traders(&self, ctx: &Context<'_>) -> Vec<User> {
         ctx.data_unchecked::<DbPool>()
             .read()
@@ -425,6 +418,7 @@ impl QueryRoot {
             .collect()
     }
 
+    // Fetch a specific user
     async fn user(&self, ctx: &Context<'_>, id: ID) -> Option<User> {
         ctx.data_unchecked::<DbPool>()
             .read()
@@ -433,6 +427,7 @@ impl QueryRoot {
             .cloned()
     }
 
+    // Fetch all users
     async fn users(&self, ctx: &Context<'_>) -> Vec<User> {
         ctx.data_unchecked::<DbPool>()
             .read()
@@ -442,6 +437,7 @@ impl QueryRoot {
             .collect()
     }
 
+    // Fetch trades, optionally filtered by trader
     async fn trades(&self, ctx: &Context<'_>, trader_id: Option<ID>) -> Vec<Trade> {
         let db = ctx.data_unchecked::<DbPool>().read();
         match trader_id {
@@ -455,6 +451,7 @@ impl QueryRoot {
         }
     }
 
+    // Fetch all open trades
     async fn open_trades(&self, ctx: &Context<'_>) -> Vec<Trade> {
         ctx.data_unchecked::<DbPool>()
             .read()
@@ -465,6 +462,7 @@ impl QueryRoot {
             .collect()
     }
 
+    // Fetch active copy relations for a follower
     async fn my_copy_relations(&self, ctx: &Context<'_>, follower_id: ID) -> Vec<CopyRelation> {
         ctx.data_unchecked::<DbPool>()
             .read()
@@ -475,6 +473,7 @@ impl QueryRoot {
             .collect()
     }
 
+    // Fetch copied trades for a follower
     async fn my_copied_trades(&self, ctx: &Context<'_>, follower_id: ID) -> Vec<CopiedTrade> {
         ctx.data_unchecked::<DbPool>()
             .read()
@@ -506,6 +505,7 @@ pub struct MutationRoot;
 
 #[Object]
 impl MutationRoot {
+    // Create a new trade
     async fn create_trade(
         &self,
         ctx: &Context<'_>,
@@ -515,6 +515,7 @@ impl MutationRoot {
         execute_create_trade(db, &input).map_err(async_graphql::Error::new)
     }
 
+    // Close an existing trade
     async fn close_trade(&self, ctx: &Context<'_>, trade_id: ID, exit_price: f64) -> Option<Trade> {
         let mut db = ctx.data_unchecked::<DbPool>().write();
         if let Some(trade) = db.trades.get_mut(&trade_id.to_string()) {
@@ -528,6 +529,7 @@ impl MutationRoot {
             trade.closed_at = Some(Utc::now());
             let closed = trade.clone();
 
+            // Update copied trades for followers
             for ct in db
                 .copied_trades
                 .values_mut()
@@ -544,6 +546,7 @@ impl MutationRoot {
         None
     }
 
+    // Copy a trader
     async fn copy_trader(
         &self,
         ctx: &Context<'_>,
@@ -553,27 +556,22 @@ impl MutationRoot {
         execute_copy_trader(db, &input).map_err(async_graphql::Error::new)
     }
 
+    // Stop copying a trader
     async fn stop_copying(&self, ctx: &Context<'_>, relation_id: ID) -> Option<CopyRelation> {
-        let mut __db__ = ctx.data_unchecked::<DbPool>().write();
-
-        if let Some(__rel__) = __db__.copy_relations.get_mut(&relation_id.to_string()) {
-            __rel__.active = false;
-
-            // Clone the trader_id before the second mutable borrow
-            let trader_id = __rel__.trader_id.to_string();
-            let result = __rel__.clone();
-
-            // Now we can borrow users mutably
-            if let Some(__trader__) = __db__.users.get_mut(&trader_id) {
-                __trader__.followers_count = (__trader__.followers_count - 1).max(0);
+        let mut db = ctx.data_unchecked::<DbPool>().write();
+        if let Some(rel) = db.copy_relations.get_mut(&relation_id.to_string()) {
+            rel.active = false;
+            let trader_id = rel.trader_id.to_string();
+            let result = rel.clone();
+            if let Some(trader) = db.users.get_mut(&trader_id) {
+                trader.followers_count = (trader.followers_count - 1).max(0);
             }
-
             return Some(result);
         }
-
         None
     }
 
+    // Register a new user
     async fn register_user(&self, ctx: &Context<'_>, username: String, is_trader: bool) -> User {
         let mut db = ctx.data_unchecked::<DbPool>().write();
         let user = User {
@@ -591,8 +589,9 @@ impl MutationRoot {
     }
 }
 
-// ============== HTTP Handlers ==============
+// ================= HTTP Handlers =================
 
+// GraphQL endpoint
 async fn graphql_handler(
     schema: web::Data<Schema<QueryRoot, MutationRoot, EmptySubscription>>,
     req: GraphQLRequest,
@@ -600,6 +599,7 @@ async fn graphql_handler(
     schema.execute(req.into_inner()).await.into()
 }
 
+// GraphQL Playground
 async fn graphql_playground() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
@@ -608,20 +608,25 @@ async fn graphql_playground() -> HttpResponse {
         ))
 }
 
+// ================= Main Server =================
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     println!("🚀 CopyTrade Backend + Snurr BPMN");
     println!("📋 Workflows: bpmn/create_trade.bpmn, bpmn/copy_trader.bpmn");
     println!("📊 Playground: http://localhost:8080/playground\n");
 
+    // Initialize in-memory DB with sample data
     let mut db = Database::default();
     init_sample_data(&mut db);
     let db_pool: DbPool = Arc::new(RwLock::new(db));
 
+    // Build GraphQL schema
     let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
         .data(db_pool)
         .finish();
 
+    // Start HTTP server
     HttpServer::new(move || {
         App::new()
             .wrap(
