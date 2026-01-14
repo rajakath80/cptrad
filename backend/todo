@@ -1,0 +1,34 @@
+https://demo.bpmn.io/new
+
+1) Copy
+graphqlmutation {
+  copyTrader(input: {
+    followerId: "user1"
+    traderId: "trader1"
+    copyRatio: 0.25
+  }) { id active }
+}
+
+2) Check relation exists:
+
+graphqlquery {
+  myCopyRelations(followerId: "user1") { id traderId }
+}
+
+3) create trade:
+
+graphqlmutation {
+  createTrade(input: {
+    traderId: "trader1"
+    symbol: "ETH/USD"
+    direction: LONG
+    entryPrice: 2500
+    quantity: 1.0
+  }) { id }
+}
+
+4) Check copied trades:
+
+graphqlquery {
+  myCopiedTrades(followerId: "user1") { id quantity }
+}
